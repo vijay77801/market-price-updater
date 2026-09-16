@@ -10,23 +10,27 @@ const PORT = process.env.PORT || 10000;
 app.use(express.json());
 
 /* =========================================================
-   ENV VARIABLES
+   ENV
 ========================================================= */
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY =
     process.env.SUPABASE_SERVICE_ROLE_KEY;
-
 const MARKET_API_KEY =
     process.env.MARKET_API_KEY;
 
-if (
-    !SUPABASE_URL ||
-    !SUPABASE_SERVICE_ROLE_KEY ||
-    !MARKET_API_KEY
-) {
-    console.error("Required environment variables are missing");
-}
+const RESOURCE_ID =
+    "9ef84268-d588-465a-a308-a864a43d0070";
+
+const DATA_GOV_URL =
+    `https://api.data.gov.in/resource/${RESOURCE_ID}`;
+
+const SOURCE_NAME =
+    "data.gov.in Mandi";
+
+const API_PAGE_SIZE = 200;
+const DB_BATCH_SIZE = 200;
+const MAX_RETRIES = 5;
 
 
 /* =========================================================
@@ -46,28 +50,52 @@ const supabase = createClient(
 
 
 /* =========================================================
-   DATA.GOV.IN API
+   INDIA STATES / UTs
 ========================================================= */
 
-const RESOURCE_ID =
-    "9ef84268-d588-465a-a308-a864a43d0070";
-
-const DATA_GOV_URL =
-    `https://api.data.gov.in/resource/${RESOURCE_ID}`;
-
-
-/* =========================================================
-   SETTINGS
-========================================================= */
-
-// Smaller page = more reliable with data.gov.in
-const API_PAGE_SIZE = 200;
-
-// Supabase bulk insert/update size
-const DB_BATCH_SIZE = 200;
-
-// Retry failed data.gov.in requests
-const MAX_RETRIES = 5;
+const STATES = [
+    "Andaman and Nicobar",
+    "Andhra Pradesh",
+    "Arunachal Pradesh",
+    "Assam",
+    "Bihar",
+    "Chandigarh",
+    "Chattisgarh",
+    "Chhattisgarh",
+    "Dadra and Nagar Haveli",
+    "Daman and Diu",
+    "Delhi",
+    "Goa",
+    "Gujarat",
+    "Haryana",
+    "Himachal Pradesh",
+    "Jammu and Kashmir",
+    "Jharkhand",
+    "Karnataka",
+    "Kerala",
+    "Ladakh",
+    "Lakshadweep",
+    "Madhya Pradesh",
+    "Maharashtra",
+    "Manipur",
+    "Meghalaya",
+    "Mizoram",
+    "Nagaland",
+    "Odisha",
+    "Orissa",
+    "Pondicherry",
+    "Puducherry",
+    "Punjab",
+    "Rajasthan",
+    "Sikkim",
+    "Tamil Nadu",
+    "Telangana",
+    "Tripura",
+    "Uttar Pradesh",
+    "Uttarakhand",
+    "Uttaranchal",
+    "West Bengal"
+];
 
 
 /* =========================================================
@@ -79,13 +107,12 @@ app.get("/", (req, res) => {
     res.json({
         status: "online",
         service: "Market Price Updater",
-
+        mode: "state-wise-sync",
         supabase:
             SUPABASE_URL &&
             SUPABASE_SERVICE_ROLE_KEY
                 ? "configured"
                 : "missing",
-
         marketApi:
             MARKET_API_KEY
                 ? "configured"
@@ -96,7 +123,7 @@ app.get("/", (req, res) => {
 
 
 /* =========================================================
-   HELPER - SLEEP
+   SLEEP
 ========================================================= */
 
 function sleep(ms) {
@@ -109,7 +136,7 @@ function sleep(ms) {
 
 
 /* =========================================================
-   NUMBER CONVERTER
+   NUMBER
 ========================================================= */
 
 function numberValue(value) {
@@ -127,17 +154,16 @@ function numberValue(value) {
             .replace(/,/g, "")
             .replace(/[^\d.-]/g, "");
 
-    const number =
-        Number(cleaned);
+    const n = Number(cleaned);
 
-    return Number.isFinite(number)
-        ? number
+    return Number.isFinite(n)
+        ? n
         : 0;
 }
 
 
 /* =========================================================
-   FIELD FINDER
+   FIELD
 ========================================================= */
 
 function getField(record, names) {
@@ -150,7 +176,6 @@ function getField(record, names) {
         ) {
             return record[name];
         }
-
     }
 
     return "";
@@ -158,7 +183,7 @@ function getField(record, names) {
 
 
 /* =========================================================
-   DATE CONVERTER
+   DATE
 ========================================================= */
 
 function parseSourceDate(value) {
@@ -170,8 +195,6 @@ function parseSourceDate(value) {
     const text =
         String(value).trim();
 
-
-    // DD/MM/YYYY
 
     let match =
         text.match(
@@ -188,11 +211,8 @@ function parseSourceDate(value) {
             `${month.padStart(2, "0")}-` +
             `${day.padStart(2, "0")}`
         );
-
     }
 
-
-    // DD-MM-YYYY
 
     match =
         text.match(
@@ -209,11 +229,8 @@ function parseSourceDate(value) {
             `${month.padStart(2, "0")}-` +
             `${day.padStart(2, "0")}`
         );
-
     }
 
-
-    // YYYY-MM-DD
 
     if (
         /^\d{4}-\d{2}-\d{2}$/.test(text)
@@ -227,344 +244,86 @@ function parseSourceDate(value) {
 
 
 /* =========================================================
-   NORMALIZE API RECORD
+   NORMALIZE
 ========================================================= */
 
 function normalizeRecord(record) {
 
-    const commodity =
-        String(
-            getField(record, [
-                "commodity",
-                "Commodity",
-                "commodity_name",
-                "Commodity_Name"
-            ]) || ""
-        ).trim();
-
-
-    const variety =
-        String(
-            getField(record, [
-                "variety",
-                "Variety"
-            ]) || ""
-        ).trim();
-
-
-    const market =
-        String(
-            getField(record, [
-                "market",
-                "Market"
-            ]) || ""
-        ).trim();
-
-
-    const state =
-        String(
-            getField(record, [
-                "state",
-                "State"
-            ]) || ""
-        ).trim();
-
-
-    const district =
-        String(
-            getField(record, [
-                "district",
-                "District"
-            ]) || ""
-        ).trim();
-
-
-    const arrivalDate =
-        String(
-            getField(record, [
-                "arrival_date",
-                "Arrival_Date",
-                "date",
-                "Date"
-            ]) || ""
-        ).trim();
-
-
-    const minPrice =
-        numberValue(
-            getField(record, [
-                "min_price",
-                "Min_Price",
-                "minprice",
-                "Min Price"
-            ])
-        );
-
-
-    const maxPrice =
-        numberValue(
-            getField(record, [
-                "max_price",
-                "Max_Price",
-                "maxprice",
-                "Max Price"
-            ])
-        );
-
-
-    const modalPrice =
-        numberValue(
-            getField(record, [
-                "modal_price",
-                "Modal_Price",
-                "modalprice",
-                "Modal Price"
-            ])
-        );
-
-
     return {
-        commodity,
-        variety,
-        market,
-        state,
-        district,
-        arrivalDate,
-        minPrice,
-        maxPrice,
-        modalPrice
+
+        commodity:
+            String(
+                getField(record, [
+                    "commodity",
+                    "Commodity"
+                ]) || ""
+            ).trim(),
+
+        variety:
+            String(
+                getField(record, [
+                    "variety",
+                    "Variety"
+                ]) || ""
+            ).trim(),
+
+        market:
+            String(
+                getField(record, [
+                    "market",
+                    "Market"
+                ]) || ""
+            ).trim(),
+
+        state:
+            String(
+                getField(record, [
+                    "state",
+                    "State"
+                ]) || ""
+            ).trim(),
+
+        district:
+            String(
+                getField(record, [
+                    "district",
+                    "District"
+                ]) || ""
+            ).trim(),
+
+        arrivalDate:
+            String(
+                getField(record, [
+                    "arrival_date",
+                    "Arrival_Date"
+                ]) || ""
+            ).trim(),
+
+        minPrice:
+            numberValue(
+                getField(record, [
+                    "min_price",
+                    "Min_Price"
+                ])
+            ),
+
+        maxPrice:
+            numberValue(
+                getField(record, [
+                    "max_price",
+                    "Max_Price"
+                ])
+            ),
+
+        modalPrice:
+            numberValue(
+                getField(record, [
+                    "modal_price",
+                    "Modal_Price"
+                ])
+            )
     };
 }
-
-
-/* =========================================================
-   FETCH DATA.GOV.IN PAGE WITH RETRY
-========================================================= */
-
-async function fetchMarketPage(offset, limit) {
-
-    const params =
-        new URLSearchParams({
-            "api-key":
-                MARKET_API_KEY,
-
-            format:
-                "json",
-
-            offset:
-                String(offset),
-
-            limit:
-                String(limit)
-        });
-
-
-    const url =
-        `${DATA_GOV_URL}?${params.toString()}`;
-
-
-    for (
-        let attempt = 1;
-        attempt <= MAX_RETRIES;
-        attempt++
-    ) {
-
-        try {
-
-            console.log(
-                `API_FETCH offset=${offset} limit=${limit} attempt=${attempt}`
-            );
-
-
-            const response =
-                await fetch(url);
-
-
-            if (!response.ok) {
-
-                throw new Error(
-                    `Market API HTTP ${response.status}`
-                );
-
-            }
-
-
-            const data =
-                await response.json();
-
-
-            if (
-                !Array.isArray(
-                    data.records
-                )
-            ) {
-
-                throw new Error(
-                    "Invalid records response from Market API"
-                );
-
-            }
-
-
-            console.log(
-                `API_SUCCESS offset=${offset} records=${data.records.length}`
-            );
-
-
-            return data;
-
-        } catch (error) {
-
-            console.error(
-                `FETCH_RETRY offset=${offset} attempt=${attempt}: ${error.message}`
-            );
-
-
-            if (
-                attempt ===
-                MAX_RETRIES
-            ) {
-
-                throw new Error(
-                    `Market API fetch failed at offset ${offset} after ${MAX_RETRIES} attempts: ${error.message}`
-                );
-
-            }
-
-
-            // 2 sec, 4 sec, 6 sec, 8 sec...
-            const waitTime =
-                attempt * 2000;
-
-
-            console.log(
-                `Waiting ${waitTime}ms before retry`
-            );
-
-
-            await sleep(
-                waitTime
-            );
-
-        }
-
-    }
-
-}
-
-
-/* =========================================================
-   TEST MARKET API
-========================================================= */
-
-app.get("/test-market-api", async (req, res) => {
-
-    try {
-
-        const data =
-            await fetchMarketPage(
-                0,
-                10
-            );
-
-
-        res.json({
-
-            success: true,
-
-            total:
-                Number(
-                    data.total || 0
-                ),
-
-            count:
-                data.records.length,
-
-            records:
-                data.records
-
-        });
-
-
-    } catch (error) {
-
-        console.error(
-            "MARKET_API_ERROR:",
-            error.message
-        );
-
-
-        res.status(500).json({
-
-            success: false,
-
-            error:
-                error.message
-
-        });
-
-    }
-
-});
-
-
-/* =========================================================
-   TEST SUPABASE
-========================================================= */
-
-app.get("/test-supabase", async (req, res) => {
-
-    try {
-
-        const {
-            data,
-            error
-        } = await supabase
-            .from("market_products")
-            .select(
-                "id,product_name,variety,current_price,market,state"
-            )
-            .limit(10);
-
-
-        if (error) {
-            throw error;
-        }
-
-
-        res.json({
-
-            success: true,
-
-            count:
-                data?.length || 0,
-
-            products:
-                data || []
-
-        });
-
-
-    } catch (error) {
-
-        console.error(
-            "SUPABASE_TEST_ERROR:",
-            error.message
-        );
-
-
-        res.status(500).json({
-
-            success: false,
-
-            error:
-                error.message
-
-        });
-
-    }
-
-});
 
 
 /* =========================================================
@@ -581,14 +340,12 @@ function createUniqueKey(
 ) {
 
     return [
-
         product || "",
         market || "",
         state || "",
         district || "",
         variety || "",
         source || ""
-
     ]
         .map(value =>
             String(value)
@@ -596,7 +353,122 @@ function createUniqueKey(
                 .toLowerCase()
         )
         .join("|||");
+}
 
+
+/* =========================================================
+   FETCH STATE PAGE
+========================================================= */
+
+async function fetchStatePage(
+    state,
+    offset,
+    limit
+) {
+
+    const params =
+        new URLSearchParams();
+
+    params.set(
+        "api-key",
+        MARKET_API_KEY
+    );
+
+    params.set(
+        "format",
+        "json"
+    );
+
+    params.set(
+        "offset",
+        String(offset)
+    );
+
+    params.set(
+        "limit",
+        String(limit)
+    );
+
+    /*
+       data.gov.in field filter
+    */
+
+    params.set(
+        "filters[state]",
+        state
+    );
+
+
+    const url =
+        `${DATA_GOV_URL}?${params.toString()}`;
+
+
+    for (
+        let attempt = 1;
+        attempt <= MAX_RETRIES;
+        attempt++
+    ) {
+
+        try {
+
+            console.log(
+                `FETCH state="${state}" offset=${offset} attempt=${attempt}`
+            );
+
+
+            const response =
+                await fetch(url);
+
+
+            if (!response.ok) {
+
+                throw new Error(
+                    `HTTP ${response.status}`
+                );
+            }
+
+
+            const data =
+                await response.json();
+
+
+            if (
+                !Array.isArray(
+                    data.records
+                )
+            ) {
+
+                throw new Error(
+                    "Invalid API records"
+                );
+            }
+
+
+            return data;
+
+        } catch (error) {
+
+            console.error(
+                `FETCH_RETRY state="${state}" offset=${offset} attempt=${attempt}: ${error.message}`
+            );
+
+
+            if (
+                attempt ===
+                MAX_RETRIES
+            ) {
+
+                throw new Error(
+                    `State ${state} failed at offset ${offset}: ${error.message}`
+                );
+            }
+
+
+            await sleep(
+                attempt * 2000
+            );
+        }
+    }
 }
 
 
@@ -606,24 +478,16 @@ function createUniqueKey(
 
 async function loadExistingPrices() {
 
-    const priceMap =
+    const map =
         new Map();
 
-
-    const pageSize =
+    const PAGE_SIZE =
         1000;
-
 
     let from = 0;
 
 
     while (true) {
-
-        const to =
-            from +
-            pageSize -
-            1;
-
 
         const {
             data,
@@ -641,16 +505,15 @@ async function loadExistingPrices() {
             `)
             .range(
                 from,
-                to
+                from + PAGE_SIZE - 1
             );
 
 
         if (error) {
 
             throw new Error(
-                `Existing prices load failed: ${error.message}`
+                error.message
             );
-
         }
 
 
@@ -662,58 +525,52 @@ async function loadExistingPrices() {
         }
 
 
-        for (
-            const row of data
-        ) {
+        for (const row of data) {
 
             const key =
                 createUniqueKey(
-
                     row.product_name,
                     row.market,
                     row.state,
                     row.district,
                     row.variety,
                     row.source
-
                 );
 
 
-            priceMap.set(
+            map.set(
                 key,
                 numberValue(
                     row.current_price
                 )
             );
-
         }
-
-
-        console.log(
-            `Loaded existing prices: ${priceMap.size}`
-        );
 
 
         if (
             data.length <
-            pageSize
+            PAGE_SIZE
         ) {
             break;
         }
 
 
         from +=
-            pageSize;
-
+            PAGE_SIZE;
     }
 
 
-    return priceMap;
+    console.log(
+        `Existing prices loaded: ${map.size}`
+    );
+
+
+    return map;
 }
 
 
 /* =========================================================
-   CREATE DATABASE ROW
+   DATABASE ROW
 ========================================================= */
 
 function createDatabaseRow(
@@ -722,40 +579,26 @@ function createDatabaseRow(
 ) {
 
     if (
-        !item.commodity
-    ) {
-        return null;
-    }
-
-
-    if (
+        !item.commodity ||
         !item.modalPrice
     ) {
         return null;
     }
 
 
-    const source =
-        "data.gov.in Mandi";
-
-
-    const uniqueKey =
+    const key =
         createUniqueKey(
-
             item.commodity,
             item.market,
             item.state,
             item.district,
             item.variety,
-            source
-
+            SOURCE_NAME
         );
 
 
     const oldPrice =
-        existingPriceMap.get(
-            uniqueKey
-        );
+        existingPriceMap.get(key);
 
 
     return {
@@ -781,6 +624,14 @@ function createDatabaseRow(
         unit:
             "quintal",
 
+        /*
+           First import:
+           previous = current.
+
+           Later sync:
+           previous = old DB current.
+        */
+
         previous_price:
             oldPrice !== undefined
                 ? oldPrice
@@ -796,7 +647,7 @@ function createDatabaseRow(
             item.maxPrice,
 
         source:
-            source,
+            SOURCE_NAME,
 
         source_date:
             parseSourceDate(
@@ -806,14 +657,12 @@ function createDatabaseRow(
         updated_at:
             new Date()
                 .toISOString()
-
     };
-
 }
 
 
 /* =========================================================
-   REMOVE DUPLICATES FROM BATCH
+   REMOVE DUPLICATES
 ========================================================= */
 
 function removeDuplicateRows(rows) {
@@ -822,20 +671,16 @@ function removeDuplicateRows(rows) {
         new Map();
 
 
-    for (
-        const row of rows
-    ) {
+    for (const row of rows) {
 
         const key =
             createUniqueKey(
-
                 row.product_name,
                 row.market,
                 row.state,
                 row.district,
                 row.variety,
                 row.source
-
             );
 
 
@@ -843,30 +688,23 @@ function removeDuplicateRows(rows) {
             key,
             row
         );
-
     }
 
 
     return Array.from(
         map.values()
     );
-
 }
 
 
 /* =========================================================
-   BULK SUPABASE UPSERT WITH RETRY
+   BULK UPSERT
 ========================================================= */
 
 async function bulkUpsert(rows) {
 
-    if (
-        !rows ||
-        rows.length === 0
-    ) {
-
+    if (!rows.length) {
         return 0;
-
     }
 
 
@@ -897,11 +735,7 @@ async function bulkUpsert(rows) {
 
 
             if (error) {
-
-                throw new Error(
-                    error.message
-                );
-
+                throw error;
             }
 
 
@@ -910,120 +744,49 @@ async function bulkUpsert(rows) {
         } catch (error) {
 
             console.error(
-                `DB_RETRY attempt=${attempt}: ${error.message}`
+                `DB_RETRY ${attempt}: ${error.message}`
             );
 
 
-            if (
-                attempt === 3
-            ) {
+            if (attempt === 3) {
 
                 throw new Error(
-                    `Supabase bulk upsert failed: ${error.message}`
+                    `Database upsert failed: ${error.message}`
                 );
-
             }
 
 
             await sleep(
                 attempt * 1500
             );
-
         }
-
     }
-
 }
 
 
 /* =========================================================
-   SMALL BULK TEST
+   TEST ONE STATE
+
+   Example:
+   /test-state?state=Andhra%20Pradesh
 ========================================================= */
 
-app.get("/sync-test", async (req, res) => {
+app.get("/test-state", async (req, res) => {
 
     try {
 
-        let limit =
-            Number(
-                req.query.limit || 100
+        const state =
+            String(
+                req.query.state ||
+                "Andhra Pradesh"
             );
 
 
-        if (
-            !Number.isFinite(limit) ||
-            limit < 1
-        ) {
-
-            limit = 100;
-
-        }
-
-
-        limit =
-            Math.min(
-                limit,
-                500
-            );
-
-
-        const existingPriceMap =
-            await loadExistingPrices();
-
-
-        const apiData =
-            await fetchMarketPage(
+        const data =
+            await fetchStatePage(
+                state,
                 0,
-                limit
-            );
-
-
-        const rows = [];
-
-        let skipped = 0;
-
-
-        for (
-            const rawRecord
-            of apiData.records
-        ) {
-
-            const item =
-                normalizeRecord(
-                    rawRecord
-                );
-
-
-            const row =
-                createDatabaseRow(
-                    item,
-                    existingPriceMap
-                );
-
-
-            if (!row) {
-
-                skipped++;
-
-                continue;
-
-            }
-
-
-            rows.push(row);
-
-        }
-
-
-        const uniqueRows =
-            removeDuplicateRows(
-                rows
-            );
-
-
-        const saved =
-            await bulkUpsert(
-                uniqueRows
+                10
             );
 
 
@@ -1031,31 +794,23 @@ app.get("/sync-test", async (req, res) => {
 
             success: true,
 
-            message:
-                "Bulk test completed",
+            state,
 
-            apiTotal:
+            total:
                 Number(
-                    apiData.total || 0
+                    data.total || 0
                 ),
 
-            fetched:
-                apiData.records.length,
+            count:
+                data.records.length,
 
-            saved,
-
-            skipped
+            records:
+                data.records
 
         });
 
 
     } catch (error) {
-
-        console.error(
-            "SYNC_TEST_ERROR:",
-            error.message
-        );
-
 
         res.status(500).json({
 
@@ -1065,17 +820,18 @@ app.get("/sync-test", async (req, res) => {
                 error.message
 
         });
-
     }
-
 });
 
 
 /* =========================================================
-   FULL MARKET SYNC
+   SYNC ONE STATE
+
+   Example:
+   /sync-state?state=Andhra%20Pradesh
 ========================================================= */
 
-app.get("/sync-all", async (req, res) => {
+app.get("/sync-state", async (req, res) => {
 
     const startedAt =
         Date.now();
@@ -1083,94 +839,50 @@ app.get("/sync-all", async (req, res) => {
 
     try {
 
-        console.log(
-            "=================================="
-        );
-
-        console.log(
-            "FULL MARKET SYNC STARTED"
-        );
-
-        console.log(
-            "=================================="
-        );
+        const state =
+            String(
+                req.query.state ||
+                "Andhra Pradesh"
+            ).trim();
 
 
-        /* -------------------------------------------------
-           Load previous database prices
-        ------------------------------------------------- */
-
-        const existingPriceMap =
+        const existingPrices =
             await loadExistingPrices();
 
 
-        console.log(
-            `Existing records before sync: ${existingPriceMap.size}`
-        );
-
-
         let offset = 0;
-
-        let apiTotal = 0;
-
         let fetched = 0;
-
         let saved = 0;
-
         let skipped = 0;
-
         let pages = 0;
+        let stateTotal = 0;
 
-
-        /* -------------------------------------------------
-           PAGE LOOP
-        ------------------------------------------------- */
 
         while (true) {
 
-            console.log(
-                `Fetching API page offset=${offset}`
-            );
-
-
-            const apiData =
-                await fetchMarketPage(
+            const data =
+                await fetchStatePage(
+                    state,
                     offset,
                     API_PAGE_SIZE
                 );
 
 
-            const records =
-                apiData.records || [];
+            if (!stateTotal) {
 
-
-            if (
-                apiTotal === 0
-            ) {
-
-                apiTotal =
+                stateTotal =
                     Number(
-                        apiData.total || 0
+                        data.total || 0
                     );
-
-
-                console.log(
-                    `Total API records: ${apiTotal}`
-                );
-
             }
 
 
-            if (
-                records.length === 0
-            ) {
+            const records =
+                data.records || [];
 
-                console.log(
-                    "No more API records"
-                );
 
+            if (!records.length) {
                 break;
-
             }
 
 
@@ -1180,28 +892,19 @@ app.get("/sync-all", async (req, res) => {
                 records.length;
 
 
-            /* -------------------------------------------------
-               NORMALIZE
-            ------------------------------------------------- */
-
-            const pageRows = [];
+            const rows = [];
 
 
-            for (
-                const rawRecord
-                of records
-            ) {
+            for (const raw of records) {
 
                 const item =
-                    normalizeRecord(
-                        rawRecord
-                    );
+                    normalizeRecord(raw);
 
 
                 const row =
                     createDatabaseRow(
                         item,
-                        existingPriceMap
+                        existingPrices
                     );
 
 
@@ -1210,30 +913,18 @@ app.get("/sync-all", async (req, res) => {
                     skipped++;
 
                     continue;
-
                 }
 
 
-                pageRows.push(
-                    row
-                );
-
+                rows.push(row);
             }
 
 
-            /* -------------------------------------------------
-               REMOVE DUPLICATES
-            ------------------------------------------------- */
-
             const uniqueRows =
                 removeDuplicateRows(
-                    pageRows
+                    rows
                 );
 
-
-            /* -------------------------------------------------
-               DB BATCHES
-            ------------------------------------------------- */
 
             for (
                 let i = 0;
@@ -1248,66 +939,294 @@ app.get("/sync-all", async (req, res) => {
                     );
 
 
-                const batchSaved =
+                saved +=
                     await bulkUpsert(
                         batch
                     );
-
-
-                saved +=
-                    batchSaved;
-
-
-                console.log(
-                    `PROGRESS fetched=${fetched}/${apiTotal} saved=${saved} skipped=${skipped}`
-                );
-
             }
 
-
-            /* -------------------------------------------------
-               NEXT PAGE
-            ------------------------------------------------- */
 
             offset +=
                 records.length;
 
 
-            /* -------------------------------------------------
-               FINISH CONDITIONS
-            ------------------------------------------------- */
-
             if (
                 records.length <
                 API_PAGE_SIZE
             ) {
-
-                console.log(
-                    "Last API page reached"
-                );
-
                 break;
-
             }
 
 
             if (
-                apiTotal > 0 &&
-                offset >= apiTotal
+                stateTotal &&
+                offset >= stateTotal
             ) {
-
-                console.log(
-                    "API total reached"
-                );
-
                 break;
-
             }
 
 
-            // Small pause to avoid hammering data.gov.in
-            await sleep(300);
+            await sleep(250);
+        }
 
+
+        res.json({
+
+            success: true,
+
+            state,
+
+            stateTotal,
+
+            fetched,
+
+            saved,
+
+            skipped,
+
+            pages,
+
+            durationSeconds:
+                Number(
+                    (
+                        (
+                            Date.now() -
+                            startedAt
+                        ) /
+                        1000
+                    ).toFixed(2)
+                )
+
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "STATE_SYNC_ERROR:",
+            error.message
+        );
+
+
+        res.status(500).json({
+
+            success: false,
+
+            error:
+                error.message
+
+        });
+    }
+});
+
+
+/* =========================================================
+   FULL STATE-WISE SYNC
+========================================================= */
+
+app.get("/sync-all", async (req, res) => {
+
+    const startedAt =
+        Date.now();
+
+
+    try {
+
+        console.log(
+            "STATE-WISE FULL SYNC STARTED"
+        );
+
+
+        const existingPrices =
+            await loadExistingPrices();
+
+
+        let totalFetched = 0;
+        let totalSaved = 0;
+        let totalSkipped = 0;
+        let totalPages = 0;
+
+        const stateResults = [];
+
+
+        for (const state of STATES) {
+
+            console.log(
+                `START STATE: ${state}`
+            );
+
+
+            let offset = 0;
+            let stateFetched = 0;
+            let stateSaved = 0;
+            let stateSkipped = 0;
+            let statePages = 0;
+            let stateTotal = 0;
+
+
+            while (true) {
+
+                const data =
+                    await fetchStatePage(
+                        state,
+                        offset,
+                        API_PAGE_SIZE
+                    );
+
+
+                if (!stateTotal) {
+
+                    stateTotal =
+                        Number(
+                            data.total || 0
+                        );
+                }
+
+
+                const records =
+                    data.records || [];
+
+
+                if (
+                    records.length === 0
+                ) {
+                    break;
+                }
+
+
+                statePages++;
+
+                stateFetched +=
+                    records.length;
+
+
+                const rows = [];
+
+
+                for (
+                    const rawRecord
+                    of records
+                ) {
+
+                    const item =
+                        normalizeRecord(
+                            rawRecord
+                        );
+
+
+                    const row =
+                        createDatabaseRow(
+                            item,
+                            existingPrices
+                        );
+
+
+                    if (!row) {
+
+                        stateSkipped++;
+
+                        continue;
+                    }
+
+
+                    rows.push(row);
+                }
+
+
+                const uniqueRows =
+                    removeDuplicateRows(
+                        rows
+                    );
+
+
+                for (
+                    let i = 0;
+                    i < uniqueRows.length;
+                    i += DB_BATCH_SIZE
+                ) {
+
+                    const batch =
+                        uniqueRows.slice(
+                            i,
+                            i + DB_BATCH_SIZE
+                        );
+
+
+                    stateSaved +=
+                        await bulkUpsert(
+                            batch
+                        );
+                }
+
+
+                offset +=
+                    records.length;
+
+
+                console.log(
+                    `${state}: fetched=${stateFetched}/${stateTotal} saved=${stateSaved}`
+                );
+
+
+                if (
+                    records.length <
+                    API_PAGE_SIZE
+                ) {
+                    break;
+                }
+
+
+                if (
+                    stateTotal > 0 &&
+                    offset >= stateTotal
+                ) {
+                    break;
+                }
+
+
+                await sleep(250);
+            }
+
+
+            totalFetched +=
+                stateFetched;
+
+            totalSaved +=
+                stateSaved;
+
+            totalSkipped +=
+                stateSkipped;
+
+            totalPages +=
+                statePages;
+
+
+            stateResults.push({
+
+                state,
+
+                apiTotal:
+                    stateTotal,
+
+                fetched:
+                    stateFetched,
+
+                saved:
+                    stateSaved,
+
+                skipped:
+                    stateSkipped
+
+            });
+
+
+            console.log(
+                `FINISHED STATE: ${state}`
+            );
+
+
+            // Small pause between states
+            await sleep(500);
         }
 
 
@@ -1324,35 +1243,7 @@ app.get("/sync-all", async (req, res) => {
 
 
         console.log(
-            "=================================="
-        );
-
-        console.log(
-            "FULL MARKET SYNC COMPLETED"
-        );
-
-        console.log(
-            `Fetched: ${fetched}`
-        );
-
-        console.log(
-            `Saved: ${saved}`
-        );
-
-        console.log(
-            `Skipped: ${skipped}`
-        );
-
-        console.log(
-            `Pages: ${pages}`
-        );
-
-        console.log(
-            `Duration: ${durationSeconds}s`
-        );
-
-        console.log(
-            "=================================="
+            "STATE-WISE FULL SYNC COMPLETED"
         );
 
 
@@ -1361,36 +1252,36 @@ app.get("/sync-all", async (req, res) => {
             success: true,
 
             message:
-                "Full market sync completed",
+                "State-wise market sync completed",
 
-            apiTotal,
+            fetched:
+                totalFetched,
 
-            fetched,
+            saved:
+                totalSaved,
 
-            saved,
+            skipped:
+                totalSkipped,
 
-            skipped,
+            pages:
+                totalPages,
 
-            pages,
+            statesProcessed:
+                STATES.length,
 
-            existingBeforeSync:
-                existingPriceMap.size,
+            durationSeconds,
 
-            durationSeconds
+            states:
+                stateResults
 
         });
 
 
     } catch (error) {
 
-        const errorMessage =
-            error?.message ||
-            String(error);
-
-
         console.error(
             "FULL_SYNC_ERROR:",
-            errorMessage
+            error.message
         );
 
 
@@ -1399,12 +1290,10 @@ app.get("/sync-all", async (req, res) => {
             success: false,
 
             error:
-                errorMessage
+                error.message
 
         });
-
     }
-
 });
 
 
@@ -1446,12 +1335,6 @@ app.get("/database-count", async (req, res) => {
 
     } catch (error) {
 
-        console.error(
-            "COUNT_ERROR:",
-            error.message
-        );
-
-
         res.status(500).json({
 
             success: false,
@@ -1460,14 +1343,12 @@ app.get("/database-count", async (req, res) => {
                 error.message
 
         });
-
     }
-
 });
 
 
 /* =========================================================
-   SERVER START
+   START
 ========================================================= */
 
 app.listen(PORT, () => {
