@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 10000;
 app.use(express.json());
 
 /* =========================================================
-   ENVIRONMENT VARIABLES
+   ENV VARIABLES
 ========================================================= */
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -20,16 +20,13 @@ const SUPABASE_SERVICE_ROLE_KEY =
 const MARKET_API_KEY =
     process.env.MARKET_API_KEY;
 
-
-/* =========================================================
-   DATA.GOV.IN MANDI API
-========================================================= */
-
-const RESOURCE_ID =
-    "9ef84268-d588-465a-a308-a864a43d0070";
-
-const DATA_GOV_URL =
-    `https://api.data.gov.in/resource/${RESOURCE_ID}`;
+if (
+    !SUPABASE_URL ||
+    !SUPABASE_SERVICE_ROLE_KEY ||
+    !MARKET_API_KEY
+) {
+    console.error("Required environment variables are missing");
+}
 
 
 /* =========================================================
@@ -38,8 +35,25 @@ const DATA_GOV_URL =
 
 const supabase = createClient(
     SUPABASE_URL,
-    SUPABASE_SERVICE_ROLE_KEY
+    SUPABASE_SERVICE_ROLE_KEY,
+    {
+        auth: {
+            persistSession: false,
+            autoRefreshToken: false
+        }
+    }
 );
+
+
+/* =========================================================
+   DATA.GOV.IN API
+========================================================= */
+
+const RESOURCE_ID =
+    "9ef84268-d588-465a-a308-a864a43d0070";
+
+const DATA_GOV_URL =
+    `https://api.data.gov.in/resource/${RESOURCE_ID}`;
 
 
 /* =========================================================
@@ -56,7 +70,6 @@ app.get("/", (req, res) => {
             SUPABASE_SERVICE_ROLE_KEY
                 ? "configured"
                 : "missing",
-
         marketApi:
             MARKET_API_KEY
                 ? "configured"
@@ -74,10 +87,13 @@ app.get("/test-supabase", async (req, res) => {
 
     try {
 
-        const { data, error } = await supabase
-            .from("market_products")
-            .select("*")
-            .limit(10);
+        const { data, error } =
+            await supabase
+                .from("market_products")
+                .select(
+                    "id,product_name,current_price,market,state"
+                )
+                .limit(10);
 
         if (error) {
             throw error;
@@ -93,14 +109,12 @@ app.get("/test-supabase", async (req, res) => {
 
         console.error(
             "SUPABASE_TEST_ERROR:",
-            error?.message || String(error)
+            error.message
         );
 
         res.status(500).json({
             success: false,
-            error:
-                error?.message ||
-                String(error)
+            error: error.message
         });
 
     }
@@ -116,45 +130,14 @@ app.get("/test-market-api", async (req, res) => {
 
     try {
 
-        if (!MARKET_API_KEY) {
-
-            return res.status(500).json({
-                success: false,
-                error:
-                    "MARKET_API_KEY is missing"
-            });
-
-        }
-
-        const url =
-            `${DATA_GOV_URL}` +
-            `?api-key=${encodeURIComponent(MARKET_API_KEY)}` +
-            `&format=json` +
-            `&offset=0` +
-            `&limit=10`;
-
-        const response =
-            await fetch(url);
-
-        if (!response.ok) {
-
-            throw new Error(
-                `Market API HTTP ${response.status}`
-            );
-
-        }
-
         const data =
-            await response.json();
+            await fetchMarketPage(0, 10);
 
         res.json({
             success: true,
-            total:
-                data.total ?? null,
+            total: data.total ?? null,
             count:
-                data.count ??
-                data.records?.length ??
-                0,
+                data.records?.length || 0,
             records:
                 data.records || []
         });
@@ -163,15 +146,12 @@ app.get("/test-market-api", async (req, res) => {
 
         console.error(
             "MARKET_API_ERROR:",
-            error?.message ||
-            String(error)
+            error.message
         );
 
         res.status(500).json({
             success: false,
-            error:
-                error?.message ||
-                String(error)
+            error: error.message
         });
 
     }
@@ -180,7 +160,7 @@ app.get("/test-market-api", async (req, res) => {
 
 
 /* =========================================================
-   NUMBER CONVERTER
+   NUMBER
 ========================================================= */
 
 function numberValue(value) {
@@ -208,7 +188,7 @@ function numberValue(value) {
 
 
 /* =========================================================
-   GET FIELD
+   FIELD FINDER
 ========================================================= */
 
 function getField(record, names) {
@@ -229,115 +209,6 @@ function getField(record, names) {
 
 
 /* =========================================================
-   NORMALIZE API RECORD
-========================================================= */
-
-function normalizeRecord(record) {
-
-    const commodity =
-        getField(record, [
-            "commodity",
-            "Commodity",
-            "commodity_name",
-            "Commodity_Name"
-        ]);
-
-    const variety =
-        getField(record, [
-            "variety",
-            "Variety"
-        ]);
-
-    const market =
-        getField(record, [
-            "market",
-            "Market"
-        ]);
-
-    const state =
-        getField(record, [
-            "state",
-            "State"
-        ]);
-
-    const district =
-        getField(record, [
-            "district",
-            "District"
-        ]);
-
-    const arrivalDate =
-        getField(record, [
-            "arrival_date",
-            "Arrival_Date",
-            "date",
-            "Date"
-        ]);
-
-    const modalPrice =
-        numberValue(
-            getField(record, [
-                "modal_price",
-                "Modal_Price",
-                "modalprice",
-                "Modal Price"
-            ])
-        );
-
-    const minPrice =
-        numberValue(
-            getField(record, [
-                "min_price",
-                "Min_Price",
-                "minprice",
-                "Min Price"
-            ])
-        );
-
-    const maxPrice =
-        numberValue(
-            getField(record, [
-                "max_price",
-                "Max_Price",
-                "maxprice",
-                "Max Price"
-            ])
-        );
-
-    return {
-
-        commodity:
-            String(commodity || "")
-                .trim(),
-
-        variety:
-            String(variety || "")
-                .trim(),
-
-        market:
-            String(market || "")
-                .trim(),
-
-        state:
-            String(state || "")
-                .trim(),
-
-        district:
-            String(district || "")
-                .trim(),
-
-        arrivalDate:
-            String(arrivalDate || "")
-                .trim(),
-
-        modalPrice,
-        minPrice,
-        maxPrice
-    };
-}
-
-
-/* =========================================================
    DATE CONVERTER
 ========================================================= */
 
@@ -351,57 +222,49 @@ function parseSourceDate(value) {
         String(value).trim();
 
 
-    // Example: 16/09/2026
+    // DD/MM/YYYY
 
-    const slashMatch =
+    let match =
         text.match(
             /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/
         );
 
-    if (slashMatch) {
+    if (match) {
 
-        const [
-            ,
-            day,
-            month,
-            year
-        ] = slashMatch;
+        const [, day, month, year] =
+            match;
 
         return (
             `${year}-` +
-            `${String(month).padStart(2, "0")}-` +
-            `${String(day).padStart(2, "0")}`
+            `${month.padStart(2, "0")}-` +
+            `${day.padStart(2, "0")}`
         );
 
     }
 
 
-    // Example: 16-09-2026
+    // DD-MM-YYYY
 
-    const dashMatch =
+    match =
         text.match(
             /^(\d{1,2})-(\d{1,2})-(\d{4})$/
         );
 
-    if (dashMatch) {
+    if (match) {
 
-        const [
-            ,
-            day,
-            month,
-            year
-        ] = dashMatch;
+        const [, day, month, year] =
+            match;
 
         return (
             `${year}-` +
-            `${String(month).padStart(2, "0")}-` +
-            `${String(day).padStart(2, "0")}`
+            `${month.padStart(2, "0")}-` +
+            `${day.padStart(2, "0")}`
         );
 
     }
 
 
-    // Example: 2026-09-16
+    // YYYY-MM-DD
 
     if (
         /^\d{4}-\d{2}-\d{2}$/.test(text)
@@ -415,7 +278,115 @@ function parseSourceDate(value) {
 
 
 /* =========================================================
-   FETCH MARKET PAGE
+   NORMALIZE RECORD
+========================================================= */
+
+function normalizeRecord(record) {
+
+    const commodity =
+        String(
+            getField(record, [
+                "commodity",
+                "Commodity",
+                "commodity_name",
+                "Commodity_Name"
+            ]) || ""
+        ).trim();
+
+
+    const variety =
+        String(
+            getField(record, [
+                "variety",
+                "Variety"
+            ]) || ""
+        ).trim();
+
+
+    const market =
+        String(
+            getField(record, [
+                "market",
+                "Market"
+            ]) || ""
+        ).trim();
+
+
+    const state =
+        String(
+            getField(record, [
+                "state",
+                "State"
+            ]) || ""
+        ).trim();
+
+
+    const district =
+        String(
+            getField(record, [
+                "district",
+                "District"
+            ]) || ""
+        ).trim();
+
+
+    const arrivalDate =
+        String(
+            getField(record, [
+                "arrival_date",
+                "Arrival_Date",
+                "date",
+                "Date"
+            ]) || ""
+        ).trim();
+
+
+    const minPrice =
+        numberValue(
+            getField(record, [
+                "min_price",
+                "Min_Price",
+                "minprice"
+            ])
+        );
+
+
+    const maxPrice =
+        numberValue(
+            getField(record, [
+                "max_price",
+                "Max_Price",
+                "maxprice"
+            ])
+        );
+
+
+    const modalPrice =
+        numberValue(
+            getField(record, [
+                "modal_price",
+                "Modal_Price",
+                "modalprice"
+            ])
+        );
+
+
+    return {
+        commodity,
+        variety,
+        market,
+        state,
+        district,
+        arrivalDate,
+        minPrice,
+        maxPrice,
+        modalPrice
+    };
+}
+
+
+/* =========================================================
+   FETCH PAGE
 ========================================================= */
 
 async function fetchMarketPage(
@@ -423,15 +394,26 @@ async function fetchMarketPage(
     limit
 ) {
 
+    const params =
+        new URLSearchParams({
+            "api-key":
+                MARKET_API_KEY,
+            format:
+                "json",
+            offset:
+                String(offset),
+            limit:
+                String(limit)
+        });
+
+
     const url =
-        `${DATA_GOV_URL}` +
-        `?api-key=${encodeURIComponent(MARKET_API_KEY)}` +
-        `&format=json` +
-        `&offset=${offset}` +
-        `&limit=${limit}`;
+        `${DATA_GOV_URL}?${params.toString()}`;
+
 
     const response =
         await fetch(url);
+
 
     if (!response.ok) {
 
@@ -441,343 +423,382 @@ async function fetchMarketPage(
 
     }
 
-    return await response.json();
+
+    const data =
+        await response.json();
+
+
+    if (
+        !Array.isArray(data.records)
+    ) {
+
+        throw new Error(
+            "Invalid records response from Market API"
+        );
+
+    }
+
+
+    return data;
 }
 
 
 /* =========================================================
-   SAVE ONE MARKET RECORD
+   LOAD CURRENT DATABASE PRICES
+
+   This lets us preserve:
+   old current_price -> previous_price
 ========================================================= */
 
-async function saveMarketRecord(item) {
+async function loadExistingPrices() {
 
-    if (!item.commodity) {
+    const priceMap =
+        new Map();
 
-        return {
-            status: "skipped",
-            reason: "commodity missing"
-        };
+    const pageSize = 1000;
 
-    }
-
-    if (!item.modalPrice) {
-
-        return {
-            status: "skipped",
-            reason: "modal price missing"
-        };
-
-    }
+    let from = 0;
 
 
-    /* -----------------------------------------------------
-       CHECK EXISTING PRODUCT
-    ----------------------------------------------------- */
+    while (true) {
 
-    const {
-        data: existingRows,
-        error: findError
-    } = await supabase
-        .from("market_products")
-        .select(
-            "id,current_price"
-        )
-        .eq(
-            "product_name",
-            item.commodity
-        )
-        .eq(
-            "market",
-            item.market
-        )
-        .eq(
-            "state",
-            item.state
-        )
-        .eq(
-            "district",
-            item.district
-        )
-        .limit(1);
+        const to =
+            from + pageSize - 1;
 
-
-    if (findError) {
-
-        console.error(
-            "DB_ERROR:",
-            findError.message
-        );
-
-        throw new Error(
-            findError.message
-        );
-
-    }
-
-
-    const existing =
-        existingRows?.[0] || null;
-
-
-    /* -----------------------------------------------------
-       UPDATE EXISTING
-    ----------------------------------------------------- */
-
-    if (existing) {
-
-        const oldCurrentPrice =
-            numberValue(
-                existing.current_price
-            );
 
         const {
-            error: updateError
+            data,
+            error
         } = await supabase
             .from("market_products")
-            .update({
-
-                previous_price:
-                    oldCurrentPrice ||
-                    item.modalPrice,
-
-                current_price:
-                    item.modalPrice,
-
-                min_price:
-                    item.minPrice,
-
-                max_price:
-                    item.maxPrice,
-
-                unit:
-                    "quintal",
-
-                source:
-                    "data.gov.in Mandi",
-
-                source_date:
-                    parseSourceDate(
-                        item.arrivalDate
-                    ),
-
-                updated_at:
-                    new Date()
-                        .toISOString()
-
-            })
-            .eq(
-                "id",
-                existing.id
-            );
+            .select(`
+                product_name,
+                market,
+                state,
+                district,
+                variety,
+                source,
+                current_price
+            `)
+            .range(from, to);
 
 
-        if (updateError) {
+        if (error) {
+            throw error;
+        }
 
-            console.error(
-                "DB_ERROR:",
-                updateError.message
-            );
 
-            throw new Error(
-                updateError.message
+        if (
+            !data ||
+            data.length === 0
+        ) {
+            break;
+        }
+
+
+        for (const row of data) {
+
+            const key =
+                createUniqueKey(
+                    row.product_name,
+                    row.market,
+                    row.state,
+                    row.district,
+                    row.variety,
+                    row.source
+                );
+
+
+            priceMap.set(
+                key,
+                numberValue(
+                    row.current_price
+                )
             );
 
         }
 
 
-        return {
-            status: "updated"
-        };
+        if (
+            data.length < pageSize
+        ) {
+            break;
+        }
 
+
+        from += pageSize;
     }
 
 
-    /* -----------------------------------------------------
-       INSERT NEW PRODUCT
-    ----------------------------------------------------- */
-
-    const {
-        error: insertError
-    } = await supabase
-        .from("market_products")
-        .insert({
-
-            product_name:
-                item.commodity,
-
-            category:
-                "Mandi Commodity",
-
-            market:
-                item.market,
-
-            state:
-                item.state,
-
-            district:
-                item.district,
-
-            unit:
-                "quintal",
-
-            previous_price:
-                item.modalPrice,
-
-            current_price:
-                item.modalPrice,
-
-            min_price:
-                item.minPrice,
-
-            max_price:
-                item.maxPrice,
-
-            source:
-                "data.gov.in Mandi",
-
-            source_date:
-                parseSourceDate(
-                    item.arrivalDate
-                ),
-
-            updated_at:
-                new Date()
-                    .toISOString()
-
-        });
+    return priceMap;
+}
 
 
-    if (insertError) {
+/* =========================================================
+   UNIQUE KEY
+========================================================= */
 
-        console.error(
-            "DB_ERROR:",
-            insertError.message
-        );
+function createUniqueKey(
+    product,
+    market,
+    state,
+    district,
+    variety,
+    source
+) {
 
-        throw new Error(
-            insertError.message
-        );
+    return [
+        product || "",
+        market || "",
+        state || "",
+        district || "",
+        variety || "",
+        source || ""
+    ]
+        .map(value =>
+            String(value)
+                .trim()
+                .toLowerCase()
+        )
+        .join("|||");
+}
 
+
+/* =========================================================
+   CREATE DATABASE ROW
+========================================================= */
+
+function createDatabaseRow(
+    item,
+    existingPriceMap
+) {
+
+    if (
+        !item.commodity ||
+        !item.modalPrice
+    ) {
+        return null;
     }
+
+
+    const source =
+        "data.gov.in Mandi";
+
+
+    const uniqueKey =
+        createUniqueKey(
+            item.commodity,
+            item.market,
+            item.state,
+            item.district,
+            item.variety,
+            source
+        );
+
+
+    const oldPrice =
+        existingPriceMap.get(
+            uniqueKey
+        );
 
 
     return {
-        status: "inserted"
+
+        product_name:
+            item.commodity,
+
+        category:
+            "Mandi Commodity",
+
+        market:
+            item.market,
+
+        state:
+            item.state,
+
+        district:
+            item.district,
+
+        variety:
+            item.variety,
+
+        unit:
+            "quintal",
+
+        previous_price:
+            oldPrice !== undefined
+                ? oldPrice
+                : item.modalPrice,
+
+        current_price:
+            item.modalPrice,
+
+        min_price:
+            item.minPrice,
+
+        max_price:
+            item.maxPrice,
+
+        source:
+            source,
+
+        source_date:
+            parseSourceDate(
+                item.arrivalDate
+            ),
+
+        updated_at:
+            new Date()
+                .toISOString()
     };
 }
 
 
 /* =========================================================
-   UPDATE / IMPORT MARKET DATA
+   BULK UPSERT
 ========================================================= */
 
-app.get("/update-market", async (req, res) => {
+async function bulkUpsert(rows) {
+
+    if (
+        !rows ||
+        rows.length === 0
+    ) {
+
+        return {
+            count: 0
+        };
+
+    }
+
+
+    const {
+        data,
+        error
+    } = await supabase
+        .from("market_products")
+        .upsert(
+            rows,
+            {
+                onConflict:
+                    "product_name,market,state,district,variety,source",
+
+                ignoreDuplicates:
+                    false
+            }
+        )
+        .select("id");
+
+
+    if (error) {
+
+        console.error(
+            "BULK_DB_ERROR:",
+            error.message
+        );
+
+        throw error;
+    }
+
+
+    return {
+        count:
+            data?.length ||
+            rows.length
+    };
+}
+
+
+/* =========================================================
+   FULL SYNC
+========================================================= */
+
+app.get("/sync-all", async (req, res) => {
+
+    const startedAt =
+        Date.now();
+
 
     try {
 
-        if (!MARKET_API_KEY) {
-
-            return res.status(500).json({
-                success: false,
-                error:
-                    "MARKET_API_KEY is not configured"
-            });
-
-        }
+        console.log(
+            "FULL_SYNC_STARTED"
+        );
 
 
-        let requestedLimit =
-            Number(
-                req.query.limit || 1
-            );
+        /* -----------------------------------------------
+           Existing prices
+        ------------------------------------------------ */
+
+        const existingPriceMap =
+            await loadExistingPrices();
 
 
-        if (
-            !Number.isFinite(
-                requestedLimit
-            ) ||
-            requestedLimit < 1
-        ) {
-
-            requestedLimit = 1;
-
-        }
+        console.log(
+            "Existing database rows:",
+            existingPriceMap.size
+        );
 
 
-        requestedLimit =
-            Math.min(
-                requestedLimit,
-                10000
-            );
+        /* -----------------------------------------------
+           Settings
+        ------------------------------------------------ */
 
+        const API_PAGE_SIZE = 500;
 
-        const pageSize =
-            Math.min(
-                requestedLimit,
-                1000
-            );
+        const DB_BATCH_SIZE = 250;
 
 
         let offset = 0;
 
-        let processed = 0;
+        let apiTotal = null;
 
-        let inserted = 0;
+        let fetched = 0;
 
-        let updated = 0;
+        let saved = 0;
 
         let skipped = 0;
 
-        let totalAvailable =
-            null;
-
-        const errors = [];
+        let pages = 0;
 
 
-        while (
-            processed <
-            requestedLimit
-        ) {
+        /* -----------------------------------------------
+           API Pagination
+        ------------------------------------------------ */
 
-            const remaining =
-                requestedLimit -
-                processed;
+        while (true) {
 
-            const limit =
-                Math.min(
-                    pageSize,
-                    remaining
-                );
+            console.log(
+                `Fetching offset ${offset}`
+            );
 
 
             const apiData =
                 await fetchMarketPage(
                     offset,
-                    limit
+                    API_PAGE_SIZE
                 );
 
 
+            const records =
+                apiData.records || [];
+
+
             if (
-                totalAvailable ===
-                null
+                apiTotal === null
             ) {
 
-                totalAvailable =
+                apiTotal =
                     Number(
-                        apiData.total ??
-                        apiData.totalRecords ??
-                        0
-                    ) || null;
+                        apiData.total || 0
+                    );
+
+                console.log(
+                    "API total:",
+                    apiTotal
+                );
 
             }
-
-
-            const records =
-                Array.isArray(
-                    apiData.records
-                )
-                    ? apiData.records
-                    : [];
 
 
             if (
@@ -785,6 +806,19 @@ app.get("/update-market", async (req, res) => {
             ) {
                 break;
             }
+
+
+            pages++;
+
+            fetched +=
+                records.length;
+
+
+            /* -------------------------------------------
+               Convert API data
+            -------------------------------------------- */
+
+            const rows = [];
 
 
             for (
@@ -798,89 +832,89 @@ app.get("/update-market", async (req, res) => {
                     );
 
 
-                try {
-
-                    const result =
-                        await saveMarketRecord(
-                            item
-                        );
-
-
-                    if (
-                        result.status ===
-                        "inserted"
-                    ) {
-
-                        inserted++;
-
-                    }
-
-                    else if (
-                        result.status ===
-                        "updated"
-                    ) {
-
-                        updated++;
-
-                    }
-
-                    else {
-
-                        skipped++;
-
-                    }
-
-                } catch (error) {
-
-                    skipped++;
-
-
-                    const errorMessage =
-                        error?.message ||
-                        String(error);
-
-
-                    console.error(
-                        "DB_ERROR:",
-                        errorMessage
+                const row =
+                    createDatabaseRow(
+                        item,
+                        existingPriceMap
                     );
 
 
-                    if (
-                        errors.length < 10
-                    ) {
+                if (!row) {
 
-                        errors.push({
+                    skipped++;
 
-                            commodity:
-                                item.commodity,
-
-                            market:
-                                item.market,
-
-                            state:
-                                item.state,
-
-                            error:
-                                errorMessage
-
-                        });
-
-                    }
-
+                    continue;
                 }
 
 
-                processed++;
+                rows.push(row);
+            }
 
 
-                if (
-                    processed >=
-                    requestedLimit
-                ) {
-                    break;
-                }
+            /* -------------------------------------------
+               Remove duplicate keys inside same API page
+            -------------------------------------------- */
 
+            const uniqueRowsMap =
+                new Map();
+
+
+            for (const row of rows) {
+
+                const key =
+                    createUniqueKey(
+                        row.product_name,
+                        row.market,
+                        row.state,
+                        row.district,
+                        row.variety,
+                        row.source
+                    );
+
+
+                uniqueRowsMap.set(
+                    key,
+                    row
+                );
+
+            }
+
+
+            const uniqueRows =
+                Array.from(
+                    uniqueRowsMap.values()
+                );
+
+
+            /* -------------------------------------------
+               Supabase batches
+            -------------------------------------------- */
+
+            for (
+                let i = 0;
+                i < uniqueRows.length;
+                i += DB_BATCH_SIZE
+            ) {
+
+                const batch =
+                    uniqueRows.slice(
+                        i,
+                        i + DB_BATCH_SIZE
+                    );
+
+
+                await bulkUpsert(
+                    batch
+                );
+
+
+                saved +=
+                    batch.length;
+
+
+                console.log(
+                    `Saved ${saved} rows`
+                );
             }
 
 
@@ -888,9 +922,21 @@ app.get("/update-market", async (req, res) => {
                 records.length;
 
 
+            /* -------------------------------------------
+               Finished?
+            -------------------------------------------- */
+
             if (
                 records.length <
-                limit
+                API_PAGE_SIZE
+            ) {
+                break;
+            }
+
+
+            if (
+                apiTotal &&
+                offset >= apiTotal
             ) {
                 break;
             }
@@ -898,25 +944,43 @@ app.get("/update-market", async (req, res) => {
         }
 
 
+        const seconds =
+            Number(
+                (
+                    (Date.now() -
+                        startedAt) /
+                    1000
+                ).toFixed(2)
+            );
+
+
+        console.log(
+            "FULL_SYNC_COMPLETED"
+        );
+
+
         res.json({
 
             success: true,
 
             message:
-                "Market data import completed",
+                "Full market sync completed",
 
-            apiTotal:
-                totalAvailable,
+            apiTotal,
 
-            processed,
+            fetched,
 
-            inserted,
-
-            updated,
+            saved,
 
             skipped,
 
-            errors
+            pages,
+
+            existingBeforeSync:
+                existingPriceMap.size,
+
+            durationSeconds:
+                seconds
 
         });
 
@@ -929,7 +993,7 @@ app.get("/update-market", async (req, res) => {
 
 
         console.error(
-            "UPDATE_ERROR:",
+            "FULL_SYNC_ERROR:",
             errorMessage
         );
 
@@ -949,7 +1013,211 @@ app.get("/update-market", async (req, res) => {
 
 
 /* =========================================================
-   SERVER START
+   SMALL BULK TEST
+
+   /sync-test?limit=100
+========================================================= */
+
+app.get("/sync-test", async (req, res) => {
+
+    try {
+
+        let limit =
+            Number(
+                req.query.limit || 100
+            );
+
+
+        if (
+            !Number.isFinite(limit) ||
+            limit < 1
+        ) {
+            limit = 100;
+        }
+
+
+        limit =
+            Math.min(
+                limit,
+                500
+            );
+
+
+        const existingPriceMap =
+            await loadExistingPrices();
+
+
+        const apiData =
+            await fetchMarketPage(
+                0,
+                limit
+            );
+
+
+        const rows = [];
+
+        let skipped = 0;
+
+
+        for (
+            const rawRecord
+            of apiData.records
+        ) {
+
+            const item =
+                normalizeRecord(
+                    rawRecord
+                );
+
+
+            const row =
+                createDatabaseRow(
+                    item,
+                    existingPriceMap
+                );
+
+
+            if (!row) {
+
+                skipped++;
+
+                continue;
+            }
+
+
+            rows.push(row);
+        }
+
+
+        /* Remove duplicate keys */
+
+        const uniqueRowsMap =
+            new Map();
+
+
+        for (const row of rows) {
+
+            const key =
+                createUniqueKey(
+                    row.product_name,
+                    row.market,
+                    row.state,
+                    row.district,
+                    row.variety,
+                    row.source
+                );
+
+
+            uniqueRowsMap.set(
+                key,
+                row
+            );
+        }
+
+
+        const uniqueRows =
+            Array.from(
+                uniqueRowsMap.values()
+            );
+
+
+        await bulkUpsert(
+            uniqueRows
+        );
+
+
+        res.json({
+
+            success: true,
+
+            message:
+                "Bulk test completed",
+
+            apiTotal:
+                Number(
+                    apiData.total || 0
+                ),
+
+            fetched:
+                apiData.records.length,
+
+            saved:
+                uniqueRows.length,
+
+            skipped
+
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "SYNC_TEST_ERROR:",
+            error.message
+        );
+
+
+        res.status(500).json({
+
+            success: false,
+
+            error:
+                error.message
+
+        });
+
+    }
+
+});
+
+
+/* =========================================================
+   DATABASE COUNT
+========================================================= */
+
+app.get("/database-count", async (req, res) => {
+
+    try {
+
+        const {
+            count,
+            error
+        } = await supabase
+            .from("market_products")
+            .select(
+                "*",
+                {
+                    count: "exact",
+                    head: true
+                }
+            );
+
+
+        if (error) {
+            throw error;
+        }
+
+
+        res.json({
+            success: true,
+            count
+        });
+
+
+    } catch (error) {
+
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+
+    }
+
+});
+
+
+/* =========================================================
+   START SERVER
 ========================================================= */
 
 app.listen(PORT, () => {
