@@ -14,8 +14,10 @@ app.use(express.json());
 ========================================================= */
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
+
 const SUPABASE_SERVICE_ROLE_KEY =
     process.env.SUPABASE_SERVICE_ROLE_KEY;
+
 const MARKET_API_KEY =
     process.env.MARKET_API_KEY;
 
@@ -50,7 +52,7 @@ const supabase = createClient(
 
 
 /* =========================================================
-   INDIA STATES / UTs
+   STATES
 ========================================================= */
 
 const STATES = [
@@ -107,16 +109,17 @@ app.get("/", (req, res) => {
     res.json({
         status: "online",
         service: "Market Price Updater",
-        mode: "state-wise-sync",
-        supabase:
-            SUPABASE_URL &&
-            SUPABASE_SERVICE_ROLE_KEY
-                ? "configured"
-                : "missing",
-        marketApi:
-            MARKET_API_KEY
-                ? "configured"
-                : "missing"
+        mode: "KG Price Mode",
+        sourceUnit: "quintal",
+        databaseUnit: "kg",
+        quantitySupport: [
+            "250g",
+            "500g",
+            "1kg",
+            "2kg",
+            "5kg",
+            "10kg"
+        ]
     });
 
 });
@@ -154,16 +157,80 @@ function numberValue(value) {
             .replace(/,/g, "")
             .replace(/[^\d.-]/g, "");
 
-    const n = Number(cleaned);
+    const number =
+        Number(cleaned);
 
-    return Number.isFinite(n)
-        ? n
+    return Number.isFinite(number)
+        ? number
         : 0;
 }
 
 
 /* =========================================================
-   FIELD
+   MONEY ROUND
+========================================================= */
+
+function money(value) {
+
+    return Number(
+        Number(value || 0)
+            .toFixed(2)
+    );
+
+}
+
+
+/* =========================================================
+   QUINTAL -> KG
+
+   1 Quintal = 100 KG
+========================================================= */
+
+function quintalToKg(price) {
+
+    return money(
+        numberValue(price) / 100
+    );
+
+}
+
+
+/* =========================================================
+   KG -> OTHER QUANTITIES
+========================================================= */
+
+function quantityPrices(pricePerKg) {
+
+    const kg =
+        numberValue(pricePerKg);
+
+    return {
+
+        "250g":
+            money(kg * 0.25),
+
+        "500g":
+            money(kg * 0.50),
+
+        "1kg":
+            money(kg),
+
+        "2kg":
+            money(kg * 2),
+
+        "5kg":
+            money(kg * 5),
+
+        "10kg":
+            money(kg * 10)
+
+    };
+
+}
+
+
+/* =========================================================
+   FIELD FINDER
 ========================================================= */
 
 function getField(record, names) {
@@ -174,11 +241,15 @@ function getField(record, names) {
             record[name] !== undefined &&
             record[name] !== null
         ) {
+
             return record[name];
+
         }
+
     }
 
     return "";
+
 }
 
 
@@ -196,10 +267,13 @@ function parseSourceDate(value) {
         String(value).trim();
 
 
+    /* DD/MM/YYYY */
+
     let match =
         text.match(
             /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/
         );
+
 
     if (match) {
 
@@ -211,14 +285,18 @@ function parseSourceDate(value) {
             `${month.padStart(2, "0")}-` +
             `${day.padStart(2, "0")}`
         );
+
     }
 
+
+    /* DD-MM-YYYY */
 
     match =
         text.match(
             /^(\d{1,2})-(\d{1,2})-(\d{4})$/
         );
 
+
     if (match) {
 
         const [, day, month, year] =
@@ -229,22 +307,28 @@ function parseSourceDate(value) {
             `${month.padStart(2, "0")}-` +
             `${day.padStart(2, "0")}`
         );
+
     }
 
+
+    /* YYYY-MM-DD */
 
     if (
         /^\d{4}-\d{2}-\d{2}$/.test(text)
     ) {
+
         return text;
+
     }
 
 
     return null;
+
 }
 
 
 /* =========================================================
-   NORMALIZE
+   NORMALIZE API RECORD
 ========================================================= */
 
 function normalizeRecord(record) {
@@ -322,7 +406,9 @@ function normalizeRecord(record) {
                     "Modal_Price"
                 ])
             )
+
     };
+
 }
 
 
@@ -340,12 +426,14 @@ function createUniqueKey(
 ) {
 
     return [
+
         product || "",
         market || "",
         state || "",
         district || "",
         variety || "",
         source || ""
+
     ]
         .map(value =>
             String(value)
@@ -353,11 +441,12 @@ function createUniqueKey(
                 .toLowerCase()
         )
         .join("|||");
+
 }
 
 
 /* =========================================================
-   FETCH STATE PAGE
+   FETCH STATE DATA
 ========================================================= */
 
 async function fetchStatePage(
@@ -368,6 +457,7 @@ async function fetchStatePage(
 
     const params =
         new URLSearchParams();
+
 
     params.set(
         "api-key",
@@ -389,10 +479,6 @@ async function fetchStatePage(
         String(limit)
     );
 
-    /*
-       data.gov.in field filter
-    */
-
     params.set(
         "filters[state]",
         state
@@ -412,7 +498,7 @@ async function fetchStatePage(
         try {
 
             console.log(
-                `FETCH state="${state}" offset=${offset} attempt=${attempt}`
+                `FETCH ${state} offset=${offset} attempt=${attempt}`
             );
 
 
@@ -425,6 +511,7 @@ async function fetchStatePage(
                 throw new Error(
                     `HTTP ${response.status}`
                 );
+
             }
 
 
@@ -441,6 +528,7 @@ async function fetchStatePage(
                 throw new Error(
                     "Invalid API records"
                 );
+
             }
 
 
@@ -449,36 +537,39 @@ async function fetchStatePage(
         } catch (error) {
 
             console.error(
-                `FETCH_RETRY state="${state}" offset=${offset} attempt=${attempt}: ${error.message}`
+                `FETCH_RETRY ${state} offset=${offset}: ${error.message}`
             );
 
 
             if (
-                attempt ===
-                MAX_RETRIES
+                attempt === MAX_RETRIES
             ) {
 
                 throw new Error(
-                    `State ${state} failed at offset ${offset}: ${error.message}`
+                    `${state} fetch failed at offset ${offset}: ${error.message}`
                 );
+
             }
 
 
             await sleep(
                 attempt * 2000
             );
+
         }
+
     }
+
 }
 
 
 /* =========================================================
-   LOAD EXISTING PRICES
+   LOAD EXISTING KG PRICES
 ========================================================= */
 
 async function loadExistingPrices() {
 
-    const map =
+    const priceMap =
         new Map();
 
     const PAGE_SIZE =
@@ -514,6 +605,7 @@ async function loadExistingPrices() {
             throw new Error(
                 error.message
             );
+
         }
 
 
@@ -521,7 +613,9 @@ async function loadExistingPrices() {
             !data ||
             data.length === 0
         ) {
+
             break;
+
         }
 
 
@@ -529,48 +623,57 @@ async function loadExistingPrices() {
 
             const key =
                 createUniqueKey(
+
                     row.product_name,
                     row.market,
                     row.state,
                     row.district,
                     row.variety,
                     row.source
+
                 );
 
 
-            map.set(
+            priceMap.set(
                 key,
                 numberValue(
                     row.current_price
                 )
             );
+
         }
 
 
         if (
-            data.length <
-            PAGE_SIZE
+            data.length < PAGE_SIZE
         ) {
+
             break;
+
         }
 
 
         from +=
             PAGE_SIZE;
+
     }
 
 
     console.log(
-        `Existing prices loaded: ${map.size}`
+        `Existing KG prices loaded: ${priceMap.size}`
     );
 
 
-    return map;
+    return priceMap;
+
 }
 
 
 /* =========================================================
-   DATABASE ROW
+   CREATE DATABASE ROW
+
+   API = ₹ / quintal
+   DATABASE = ₹ / kg
 ========================================================= */
 
 function createDatabaseRow(
@@ -582,23 +685,52 @@ function createDatabaseRow(
         !item.commodity ||
         !item.modalPrice
     ) {
+
         return null;
+
     }
 
 
-    const key =
+    const currentPriceKg =
+        quintalToKg(
+            item.modalPrice
+        );
+
+
+    const minPriceKg =
+        quintalToKg(
+            item.minPrice
+        );
+
+
+    const maxPriceKg =
+        quintalToKg(
+            item.maxPrice
+        );
+
+
+    const uniqueKey =
         createUniqueKey(
+
             item.commodity,
             item.market,
             item.state,
             item.district,
             item.variety,
             SOURCE_NAME
+
         );
 
 
-    const oldPrice =
-        existingPriceMap.get(key);
+    /*
+       Existing DB price is already KG
+       because we ran migration SQL.
+    */
+
+    const oldKgPrice =
+        existingPriceMap.get(
+            uniqueKey
+        );
 
 
     return {
@@ -622,29 +754,21 @@ function createDatabaseRow(
             item.variety,
 
         unit:
-            "quintal",
-
-        /*
-           First import:
-           previous = current.
-
-           Later sync:
-           previous = old DB current.
-        */
+            "kg",
 
         previous_price:
-            oldPrice !== undefined
-                ? oldPrice
-                : item.modalPrice,
+            oldKgPrice !== undefined
+                ? money(oldKgPrice)
+                : currentPriceKg,
 
         current_price:
-            item.modalPrice,
+            currentPriceKg,
 
         min_price:
-            item.minPrice,
+            minPriceKg,
 
         max_price:
-            item.maxPrice,
+            maxPriceKg,
 
         source:
             SOURCE_NAME,
@@ -657,7 +781,9 @@ function createDatabaseRow(
         updated_at:
             new Date()
                 .toISOString()
+
     };
+
 }
 
 
@@ -675,12 +801,14 @@ function removeDuplicateRows(rows) {
 
         const key =
             createUniqueKey(
+
                 row.product_name,
                 row.market,
                 row.state,
                 row.district,
                 row.variety,
                 row.source
+
             );
 
 
@@ -688,12 +816,14 @@ function removeDuplicateRows(rows) {
             key,
             row
         );
+
     }
 
 
     return Array.from(
         map.values()
     );
+
 }
 
 
@@ -704,7 +834,9 @@ function removeDuplicateRows(rows) {
 async function bulkUpsert(rows) {
 
     if (!rows.length) {
+
         return 0;
+
     }
 
 
@@ -725,17 +857,21 @@ async function bulkUpsert(rows) {
                 .upsert(
                     rows,
                     {
+
                         onConflict:
                             "product_name,market,state,district,variety,source",
 
                         ignoreDuplicates:
                             false
+
                     }
                 );
 
 
             if (error) {
+
                 throw error;
+
             }
 
 
@@ -748,27 +884,76 @@ async function bulkUpsert(rows) {
             );
 
 
-            if (attempt === 3) {
+            if (
+                attempt === 3
+            ) {
 
                 throw new Error(
                     `Database upsert failed: ${error.message}`
                 );
+
             }
 
 
             await sleep(
                 attempt * 1500
             );
+
         }
+
     }
+
 }
 
 
 /* =========================================================
-   TEST ONE STATE
+   PRICE CALCULATOR API
 
    Example:
-   /test-state?state=Andhra%20Pradesh
+   /price?kg=26.25
+========================================================= */
+
+app.get("/price", (req, res) => {
+
+    const pricePerKg =
+        numberValue(
+            req.query.kg
+        );
+
+
+    if (!pricePerKg) {
+
+        return res.status(400).json({
+
+            success: false,
+
+            error:
+                "Enter KG price. Example: /price?kg=26.25"
+
+        });
+
+    }
+
+
+    res.json({
+
+        success: true,
+
+        pricePerKg:
+            money(pricePerKg),
+
+        prices:
+            quantityPrices(
+                pricePerKg
+            )
+
+    });
+
+});
+
+
+/* =========================================================
+   TEST ANDHRA PRADESH
 ========================================================= */
 
 app.get("/test-state", async (req, res) => {
@@ -790,6 +975,52 @@ app.get("/test-state", async (req, res) => {
             );
 
 
+        const converted =
+            data.records.map(raw => {
+
+                const item =
+                    normalizeRecord(raw);
+
+
+                const priceKg =
+                    quintalToKg(
+                        item.modalPrice
+                    );
+
+
+                return {
+
+                    state:
+                        item.state,
+
+                    district:
+                        item.district,
+
+                    market:
+                        item.market,
+
+                    commodity:
+                        item.commodity,
+
+                    variety:
+                        item.variety,
+
+                    source_price_per_quintal:
+                        item.modalPrice,
+
+                    price_per_kg:
+                        priceKg,
+
+                    prices:
+                        quantityPrices(
+                            priceKg
+                        )
+
+                };
+
+            });
+
+
         res.json({
 
             success: true,
@@ -802,10 +1033,10 @@ app.get("/test-state", async (req, res) => {
                 ),
 
             count:
-                data.records.length,
+                converted.length,
 
             records:
-                data.records
+                converted
 
         });
 
@@ -820,15 +1051,14 @@ app.get("/test-state", async (req, res) => {
                 error.message
 
         });
+
     }
+
 });
 
 
 /* =========================================================
    SYNC ONE STATE
-
-   Example:
-   /sync-state?state=Andhra%20Pradesh
 ========================================================= */
 
 app.get("/sync-state", async (req, res) => {
@@ -851,11 +1081,16 @@ app.get("/sync-state", async (req, res) => {
 
 
         let offset = 0;
-        let fetched = 0;
-        let saved = 0;
-        let skipped = 0;
-        let pages = 0;
+
         let stateTotal = 0;
+
+        let fetched = 0;
+
+        let saved = 0;
+
+        let skipped = 0;
+
+        let pages = 0;
 
 
         while (true) {
@@ -874,6 +1109,7 @@ app.get("/sync-state", async (req, res) => {
                     Number(
                         data.total || 0
                     );
+
             }
 
 
@@ -882,14 +1118,16 @@ app.get("/sync-state", async (req, res) => {
 
 
             if (!records.length) {
+
                 break;
+
             }
 
 
-            pages++;
-
             fetched +=
                 records.length;
+
+            pages++;
 
 
             const rows = [];
@@ -913,10 +1151,12 @@ app.get("/sync-state", async (req, res) => {
                     skipped++;
 
                     continue;
+
                 }
 
 
                 rows.push(row);
+
             }
 
 
@@ -943,6 +1183,7 @@ app.get("/sync-state", async (req, res) => {
                     await bulkUpsert(
                         batch
                     );
+
             }
 
 
@@ -950,11 +1191,18 @@ app.get("/sync-state", async (req, res) => {
                 records.length;
 
 
+            console.log(
+                `${state}: ${fetched}/${stateTotal}`
+            );
+
+
             if (
                 records.length <
                 API_PAGE_SIZE
             ) {
+
                 break;
+
             }
 
 
@@ -962,11 +1210,14 @@ app.get("/sync-state", async (req, res) => {
                 stateTotal &&
                 offset >= stateTotal
             ) {
+
                 break;
+
             }
 
 
             await sleep(250);
+
         }
 
 
@@ -975,6 +1226,9 @@ app.get("/sync-state", async (req, res) => {
             success: true,
 
             state,
+
+            unit:
+                "kg",
 
             stateTotal,
 
@@ -1016,12 +1270,14 @@ app.get("/sync-state", async (req, res) => {
                 error.message
 
         });
+
     }
+
 });
 
 
 /* =========================================================
-   FULL STATE-WISE SYNC
+   FULL INDIA STATE-WISE SYNC
 ========================================================= */
 
 app.get("/sync-all", async (req, res) => {
@@ -1033,7 +1289,7 @@ app.get("/sync-all", async (req, res) => {
     try {
 
         console.log(
-            "STATE-WISE FULL SYNC STARTED"
+            "FULL KG MARKET SYNC STARTED"
         );
 
 
@@ -1042,9 +1298,13 @@ app.get("/sync-all", async (req, res) => {
 
 
         let totalFetched = 0;
+
         let totalSaved = 0;
+
         let totalSkipped = 0;
+
         let totalPages = 0;
+
 
         const stateResults = [];
 
@@ -1052,16 +1312,21 @@ app.get("/sync-all", async (req, res) => {
         for (const state of STATES) {
 
             console.log(
-                `START STATE: ${state}`
+                `START: ${state}`
             );
 
 
             let offset = 0;
-            let stateFetched = 0;
-            let stateSaved = 0;
-            let stateSkipped = 0;
-            let statePages = 0;
+
             let stateTotal = 0;
+
+            let stateFetched = 0;
+
+            let stateSaved = 0;
+
+            let stateSkipped = 0;
+
+            let statePages = 0;
 
 
             while (true) {
@@ -1080,6 +1345,7 @@ app.get("/sync-all", async (req, res) => {
                         Number(
                             data.total || 0
                         );
+
                 }
 
 
@@ -1087,31 +1353,26 @@ app.get("/sync-all", async (req, res) => {
                     data.records || [];
 
 
-                if (
-                    records.length === 0
-                ) {
+                if (!records.length) {
+
                     break;
+
                 }
 
 
-                statePages++;
-
                 stateFetched +=
                     records.length;
+
+                statePages++;
 
 
                 const rows = [];
 
 
-                for (
-                    const rawRecord
-                    of records
-                ) {
+                for (const raw of records) {
 
                     const item =
-                        normalizeRecord(
-                            rawRecord
-                        );
+                        normalizeRecord(raw);
 
 
                     const row =
@@ -1126,10 +1387,12 @@ app.get("/sync-all", async (req, res) => {
                         stateSkipped++;
 
                         continue;
+
                     }
 
 
                     rows.push(row);
+
                 }
 
 
@@ -1156,6 +1419,7 @@ app.get("/sync-all", async (req, res) => {
                         await bulkUpsert(
                             batch
                         );
+
                 }
 
 
@@ -1172,19 +1436,24 @@ app.get("/sync-all", async (req, res) => {
                     records.length <
                     API_PAGE_SIZE
                 ) {
+
                     break;
+
                 }
 
 
                 if (
-                    stateTotal > 0 &&
+                    stateTotal &&
                     offset >= stateTotal
                 ) {
+
                     break;
+
                 }
 
 
                 await sleep(250);
+
             }
 
 
@@ -1221,30 +1490,13 @@ app.get("/sync-all", async (req, res) => {
 
 
             console.log(
-                `FINISHED STATE: ${state}`
+                `DONE: ${state}`
             );
 
 
-            // Small pause between states
             await sleep(500);
+
         }
-
-
-        const durationSeconds =
-            Number(
-                (
-                    (
-                        Date.now() -
-                        startedAt
-                    ) /
-                    1000
-                ).toFixed(2)
-            );
-
-
-        console.log(
-            "STATE-WISE FULL SYNC COMPLETED"
-        );
 
 
         res.json({
@@ -1252,7 +1504,10 @@ app.get("/sync-all", async (req, res) => {
             success: true,
 
             message:
-                "State-wise market sync completed",
+                "Full India KG market sync completed",
+
+            unit:
+                "kg",
 
             fetched:
                 totalFetched,
@@ -1266,10 +1521,16 @@ app.get("/sync-all", async (req, res) => {
             pages:
                 totalPages,
 
-            statesProcessed:
-                STATES.length,
-
-            durationSeconds,
+            durationSeconds:
+                Number(
+                    (
+                        (
+                            Date.now() -
+                            startedAt
+                        ) /
+                        1000
+                    ).toFixed(2)
+                ),
 
             states:
                 stateResults
@@ -1293,7 +1554,9 @@ app.get("/sync-all", async (req, res) => {
                 error.message
 
         });
+
     }
+
 });
 
 
@@ -1320,7 +1583,9 @@ app.get("/database-count", async (req, res) => {
 
 
         if (error) {
+
             throw error;
+
         }
 
 
@@ -1343,12 +1608,14 @@ app.get("/database-count", async (req, res) => {
                 error.message
 
         });
+
     }
+
 });
 
 
 /* =========================================================
-   START
+   SERVER
 ========================================================= */
 
 app.listen(PORT, () => {
