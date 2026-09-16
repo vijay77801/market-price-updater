@@ -1,0 +1,14 @@
+{
+  "name": "market-price-updater",
+  "version": "1.0.0",
+  "description": "Live market price updater for Supabase",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0"
+  }
+}
